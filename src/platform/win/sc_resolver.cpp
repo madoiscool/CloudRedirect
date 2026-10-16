@@ -147,6 +147,84 @@ static uintptr_t ResolveGlobalEngine(uintptr_t scBase) {
     return 0;
 }
 
+// ── CAppInfoCache access (KV injector) ────────────────────────────────
+// Read straight from GetAppInfo call sites, so neither the engine global nor
+// the cache offset is a per-build constant (0xE68 on older builds, 0x1208 on
+// .text 0x118B340):
+//   mov rbx, cs:[rip+g_pCSteamEngine]
+//   lea rcx, [rbx+cacheOff]
+//   call GetAppInfo
+// Only the KV injector consumes this: the other CSteamEngine users still rely
+// on hardcoded member offsets that are not verified for newer layouts.
+
+struct AppInfoCacheSite { uintptr_t global; uint32_t off; int votes; };
+
+static int ScanAppInfoCacheSites(uintptr_t getAppInfo, AppInfoCacheSite* sites, int maxSites) {
+    const uintptr_t textBase = SigScanner::GetTextBase();
+    const size_t textSize = SigScanner::GetTextSize();
+    const uintptr_t dataBase = SigScanner::GetDataBase();
+    const uintptr_t dataEnd = dataBase + SigScanner::GetDataSize();
+    const auto* text = reinterpret_cast<const uint8_t*>(textBase);
+    int count = 0;
+
+    __try {
+        for (size_t i = 7; i + 5 <= textSize; ++i) {
+            if (text[i] != 0xE8) continue;
+            if (textBase + i + 5 + *reinterpret_cast<const int32_t*>(text + i + 1) != getAppInfo) continue;
+
+            // lea rcx, [base+disp32] immediately before the call
+            const uint8_t* lea = text + i - 7;
+            const uint8_t modrm = lea[2];
+            if ((lea[0] & 0xFE) != 0x48 || lea[1] != 0x8D) continue;           // REX.W(+B) lea
+            if ((modrm >> 6) != 2 || ((modrm >> 3) & 7) != 1 || (modrm & 7) == 4) continue;
+            const int baseReg = (modrm & 7) | ((lea[0] & 1) << 3);
+            const int32_t disp = *reinterpret_cast<const int32_t*>(lea + 3);
+            if (disp <= 0 || disp >= 0x10000) continue;
+
+            // mov baseReg, [rip+global] shortly before the lea
+            uintptr_t global = 0;
+            for (int back = 7; back <= 40 && !global; ++back) {
+                const uintptr_t mov = textBase + (i - 7) - back;
+                if (mov < textBase) break;
+                const uint8_t* m = reinterpret_cast<const uint8_t*>(mov);
+                const uintptr_t g = SigScanner::DecodeRipRelMov(mov);
+                const int dstReg = ((m[2] >> 3) & 7) | ((m[0] & 4) << 1);
+                if (g >= dataBase && g < dataEnd && dstReg == baseReg) global = g;
+            }
+            if (!global) continue;
+
+            int k = 0;
+            while (k < count && !(sites[k].global == global && sites[k].off == (uint32_t)disp)) ++k;
+            if (k == count) {
+                if (count == maxSites) continue;
+                sites[count++] = { global, (uint32_t)disp, 0 };
+            }
+            sites[k].votes++;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    return count;
+}
+
+static bool ResolveAppInfoCacheAccess(uintptr_t getAppInfo, uintptr_t scBase,
+                                      uintptr_t& outGlobal, uint32_t& outOff) {
+    if (!getAppInfo) return false;
+    AppInfoCacheSite sites[16] = {};
+    const int n = ScanAppInfoCacheSites(getAppInfo, sites, 16);
+
+    int best = -1;
+    for (int k = 0; k < n; ++k)
+        if (best < 0 || sites[k].votes > sites[best].votes) best = k;
+    if (best < 0 || sites[best].votes < 2) {
+        LOG("[Resolver] AppInfoCache: no agreeing GetAppInfo call sites (%d candidate(s))", n);
+        return false;
+    }
+    outGlobal = sites[best].global;
+    outOff = sites[best].off;
+    LOG("[Resolver] AppInfoCache: engine global @ %p (RVA 0x%llX), cache +0x%X (%d call site(s))",
+        (void*)outGlobal, (uint64_t)(outGlobal - scBase), outOff, sites[best].votes);
+    return true;
+}
+
 // ── Protobuf helpers ──────────────────────────────────────────────────
 // From IDA (build 1782344391):
 //
@@ -687,6 +765,10 @@ ResolvedAddrs Resolve(uintptr_t steamClientBase) {
     r.getAppInfo     = ResolveGetAppInfo();
     r.getSection     = ResolveGetSection();
     r.readConfigU64  = ResolveReadConfigU64(r.getAppInfo);
+    if (!ResolveAppInfoCacheAccess(r.getAppInfo, steamClientBase, r.kvEngine, r.engineOffAppInfoCache)) {
+        r.kvEngine = r.globalEngine;  // legacy path: lea+0xE68 backwalk
+        r.engineOffAppInfoCache = 0;  // filled with the legacy default below
+    }
 
     // Phase 10: BAsyncSend (string xref — unique "CProtoBufMsg::BAsyncSend")
     r.bAsyncSend = ResolveFuncByStringXref(
@@ -1013,7 +1095,7 @@ ResolvedAddrs Resolve(uintptr_t steamClientBase) {
     r.engineOffUserMap      = 0;
     r.ccmOffConnContext     = 0;
     r.userOffCcmInterface   = 0;
-    r.engineOffAppInfoCache = 0xE68;
+    if (!r.engineOffAppInfoCache) r.engineOffAppInfoCache = 0xE68;
 
     LOG("[Resolver] === Auto-resolution complete ===");
     return r;
