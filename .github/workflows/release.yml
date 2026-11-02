@@ -1,0 +1,71 @@
+name: Release
+
+# Run from the Actions tab. Builds the DLL, CLI and app, then publishes a
+# release tagged v<ReleaseVersion from Version.props>. Asset names and the
+# hash-only .sha256 files are what the DLL and app auto-updaters expect.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = ([xml](Get-Content Version.props)).Project.PropertyGroup.ReleaseVersion | Where-Object { $_ } | Select-Object -First 1
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "ReleaseVersion '$v' is not X.Y.Z" }
+          "tag=v$v" >> $env:GITHUB_OUTPUT
+          Write-Host "Releasing v$v"
+
+      - name: Refuse to overwrite an existing release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${{ steps.ver.outputs.tag }}" --repo "${{ github.repository }}" 2>$null
+          if ($LASTEXITCODE -eq 0) { throw "Release ${{ steps.ver.outputs.tag }} already exists; bump Version.props first" }
+          exit 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake -B build -G "Visual Studio 17 2022" -A x64
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build --config Release
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Collect assets
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item build/Release/cloud_redirect.dll dist/
+          Copy-Item ui/bin/publish/CloudRedirect.exe dist/
+          foreach ($f in 'cloud_redirect.dll', 'CloudRedirect.exe') {
+            $hash = (Get-FileHash "dist/$f" -Algorithm SHA256).Hash.ToLower()
+            [IO.File]::WriteAllText("dist/$f.sha256", $hash)
+          }
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.ver.outputs.tag }}" `
+            --repo "${{ github.repository }}" `
+            --target "${{ github.sha }}" `
+            --title "CloudRedirect ${{ steps.ver.outputs.tag }}" `
+            --generate-notes `
+            dist/cloud_redirect.dll dist/cloud_redirect.dll.sha256 `
+            dist/CloudRedirect.exe dist/CloudRedirect.exe.sha256
