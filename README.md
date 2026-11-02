@@ -1,5 +1,9 @@
 # CloudRedirect
 
+> **About this fork:** this is an unofficial fork of [crghofficial/cloudredirect](https://github.com/crghofficial/cloudredirect) with fixes for the Oct–Nov 2026 Steam client builds (stable 1792618285, beta 1793235415). It is **Windows only**: the Linux and Flatpak code is unchanged from upstream and not tested here, so use upstream on Linux. The warning below about the official source is the upstream author's.
+>
+> Changes on top of upstream: CProtoBufMsg layout detection (new Steam message layout), fixed truncated uploads on beta, protobuf-based reply headers, KV injector (cloud quota/save rules) working on both builds, account-ID fallback for UDP logins, cooperative yield re-enabled, save rules re-applied every call and a slot-4 fallback for the batch RPCs (both from upstream PR #2 by Ak4ai), and R2/S3 test connection buttons.
+
 ""Steam Cloud"" for 'lua' games.
 
 **This the only official source for CloudRedirect. Any other websites are not operated by me or are otherwise endorsed by this project. At least one of those fake sites was actively distributing malware!**
