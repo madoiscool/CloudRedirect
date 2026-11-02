@@ -533,18 +533,41 @@ static uintptr_t ResolveKvGetUint64(uintptr_t /*kvFindKeyAddr*/) {
 // ── GetAppInfo, GetSection, ReadConfigU64 ─────────────────────────────
 // GetAppInfo has a distinctive prologue: mov r8d,[rcx+68h]; mov r9d,edx; cmp r8d,0FFFFFFFFh
 //   44 8B 41 68  44 8B CA  41 83 F8 FF
+// The field offset moved to +28h on beta 1793235415. With it wildcarded the shape
+// matches ~20 functions, so the fallback takes the candidate whose call sites agree
+// on an engine global + cache offset (lea rcx,[engine+off]; call), which only the
+// real GetAppInfo has.
 static uintptr_t ResolveGetAppInfo() {
     static const uint8_t pat[] = {
         0x44, 0x8B, 0x41, 0x68,       // mov r8d, [rcx+68h]
         0x44, 0x8B, 0xCA,             // mov r9d, edx
         0x41, 0x83, 0xF8, 0xFF,       // cmp r8d, 0FFFFFFFFh
     };
-    static const char mask[] = "xxxxxxxxxxx";
 
-    uintptr_t result = SigScanner::FindPattern(pat, mask, 11);
-    if (result)
+    uintptr_t result = SigScanner::FindPattern(pat, "xxxxxxxxxxx", 11);
+    if (result) {
         LOG("[Resolver] GetAppInfo @ %p (RVA 0x%llX) via signature",
             (void*)result, (uint64_t)(result - SigScanner::GetImageBase()));
+        return result;
+    }
+
+    const uintptr_t textBase = SigScanner::GetTextBase();
+    const uintptr_t textEnd = textBase + SigScanner::GetTextSize();
+    int bestVotes = 1;  // require at least two agreeing call sites
+    for (uintptr_t at = textBase; at < textEnd; ) {
+        uintptr_t hit = SigScanner::FindPatternInRange(at, textEnd - at, pat, "xxx?xxxxxxx", 11);
+        if (!hit) break;
+        AppInfoCacheSite sites[4] = {};
+        const int n = ScanAppInfoCacheSites(hit, sites, 4);
+        for (int k = 0; k < n; ++k) {
+            if (sites[k].votes > bestVotes) { bestVotes = sites[k].votes; result = hit; }
+        }
+        at = hit + 1;
+    }
+
+    if (result)
+        LOG("[Resolver] GetAppInfo @ %p (RVA 0x%llX) via wildcarded signature (%d agreeing call sites)",
+            (void*)result, (uint64_t)(result - SigScanner::GetImageBase()), bestVotes);
     else
         LOG("[Resolver] GetAppInfo: signature not found");
     return result;
