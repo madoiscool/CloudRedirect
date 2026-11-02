@@ -1029,14 +1029,6 @@ static bool InvokeYieldPrimitive(uintptr_t job) {
 // inactive. Stale RVA fails closed (no yield, hook disabled).
 static void CooperativeYieldCurrentJob() {
     if (!g_steamClientBase) return;
-    // ponytail: yielding from a slot 5 hook crashed every session on the shifted-
-    // CProtoBufMsg builds (next resumed job faults on a misaligned stack in tier0),
-    // so those builds use the blocking wait. Re-enable once the yield is verified there.
-    if (g_pbMsgShift.load(std::memory_order_relaxed) > 0) {
-        LOG("[CoopYield] new-layout steamclient: cooperative yield disabled (blocking wait)");
-        CoopYield::DisableYieldHook();
-        return;
-    }
     uintptr_t job = ReadCurrentJobPtr();
     if (!job) return;  // not on the job thread (e.g. a worker) -> nothing to yield
     // Must verify coroutine active: yielding inactive corrupts stack (coroutine.cpp:434).
