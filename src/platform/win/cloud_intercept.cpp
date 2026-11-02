@@ -1877,7 +1877,12 @@ static bool __fastcall ServiceMethodDirectHook(void* thisptr, const char* method
 
     // Only intercept the RPCs known to use slot 4 directly (zero-alloc check via strcmp)
     bool isSlot4Rpc = (strcmp(methodName, RPC_BEGIN_UPLOAD) == 0 || strcmp(methodName, RPC_COMMIT_UPLOAD) == 0 ||
-                       strcmp(methodName, RPC_FILE_DOWNLOAD) == 0 || strcmp(methodName, RPC_DELETE_FILE) == 0);
+                       strcmp(methodName, RPC_FILE_DOWNLOAD) == 0 || strcmp(methodName, RPC_DELETE_FILE) == 0 ||
+                       // Normally answered at slot 5. If slot 5 passes them through (e.g. the
+                       // CProtoBufMsg layout was not recognised), Steam's own slot 5 calls slot 4
+                       // with the raw bodies, so sync still works here.
+                       strcmp(methodName, RPC_GET_CHANGELIST) == 0 || strcmp(methodName, RPC_LAUNCH_INTENT) == 0 ||
+                       strcmp(methodName, RPC_BEGIN_BATCH) == 0 || strcmp(methodName, RPC_COMPLETE_BATCH) == 0);
     if (!isSlot4Rpc) {
         return g_originalSlot4(thisptr, methodName, requestBody, responseBody, flags);
     }
@@ -1926,6 +1931,8 @@ static bool __fastcall ServiceMethodDirectHook(void* thisptr, const char* method
 #endif
 
     // Capture SteamID from request header if not already cached.
+
+    CompleteBatchInFlightMark cbMark(strcmp(methodName, RPC_COMPLETE_BATCH) == 0);
 
     // Call the appropriate handler to build a response body
     auto dispatched = DispatchCloudRpc(methodName, realAppId, innerFields);
