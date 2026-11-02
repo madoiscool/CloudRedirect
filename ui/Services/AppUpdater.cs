@@ -16,7 +16,7 @@ namespace CloudRedirect.Services;
 internal static class AppUpdater
 {
     private const string RepoOwner = "madoiscool";
-    private const string RepoName = "cloudredirect-crgh";
+    private const string RepoName = "CloudRedirect";
     // Uses /releases (not /releases/latest) so prerelease/draft flags and tag
     // suffixes can be filtered client-side.
     private const string ReleasesApiUrl = $"https://api.github.com/repos/{RepoOwner}/{RepoName}/releases";

@@ -49,7 +49,7 @@ With more to come over time.
 
 ## Usage (Windows)
 
-Grab the latest release from the [Releases page](https://github.com/madoiscool/cloudredirect-crgh/releases).
+Grab the latest release from the [Releases page](https://github.com/madoiscool/CloudRedirect/releases).
 
 Run the EXE. Pick your mode - STfixer mode for fixes to ST bugs, CloudRedirect mode for the good stuff. In Setup, hit 'Run All Patches'. Go to the Cloud Provider tab, select your provider. If it is a cloud provider, sign in to it.
 
