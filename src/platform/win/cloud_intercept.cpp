@@ -472,7 +472,6 @@ static void ScheduleStartupMetadataSync() {
 
 static std::atomic<bool> g_parentalBypassPlaytime{false};
 static std::atomic<bool> g_parentalIgnorePlaytime{false};
-static std::atomic<uint64_t> g_detectedSteamVersion{0};
 
 // Cloud-redirect master toggle (default ON). When OFF the DLL still applies manifest pinning + patches but skips HTTP/storage/interception.
 static std::atomic<bool> g_cloudRedirectEnabled{true};
@@ -1713,29 +1712,13 @@ static ptrdiff_t SEH_SerializeToArray(void* bodyObj, uint8_t* buf, uint64_t expe
     __try {
         uintptr_t bufAddr = reinterpret_cast<uintptr_t>(buf);
         uintptr_t result = g_serializeToArray(bodyObj, buf, (int)expectedSize);
-        if (!result) return -1;
 
-        if (g_detectedSteamVersion.load(std::memory_order_relaxed) >= 1778281814ULL) {
-            if ((result & 0xFF) != 0) return (ptrdiff_t)expectedSize;
-            return -1;
-        }
-
-        if (result >= bufAddr && result <= bufAddr + expectedSize) {
-            return static_cast<ptrdiff_t>(result - bufAddr);
-        }
-
-        if ((result & 0xFF) != 0) {
-            return (ptrdiff_t)expectedSize;
-        }
-
-        if (result < bufAddr) {
-            LOG("[VtHook] SerializeToArray returned invalid end pointer %p (buf=%p)",
-                (void*)result, (void*)bufAddr);
-            return -1;
-        }
-
-        LOG("[VtHook] SerializeToArray returned invalid end pointer %p (buf=%p)",
-            (void*)result, (void*)bufAddr);
+        // Old builds return the end pointer, newer ones a bool whose upper bits are
+        // garbage. ByteSize is exact, so a successful write is always the full size:
+        // never derive a length from a value that may only look like a pointer
+        // (that truncated messages, e.g. dropping BeginFileUpload's filename).
+        if (result == bufAddr + expectedSize) return (ptrdiff_t)expectedSize;
+        if ((result & 0xFF) != 0) return (ptrdiff_t)expectedSize;
         return -1;
     } __except(EXCEPTION_EXECUTE_HANDLER) {
         LOG("[VtHook] EXCEPTION in SerializeToArray: code=0x%08X", GetExceptionCode());
@@ -1759,13 +1742,6 @@ static std::vector<uint8_t> SerializeBodyToBytes(void* bodyObj) {
         LOG("[VtHook] SerializeToArray failed (returned %lld)", (long long)written);
         return {};
     }
-    // ByteSize is a conservative upper bound; actual serialized length is often smaller.
-    if ((ptrdiff_t)size != written) {
-        LOG("[VtHook] SerializeToArray wrote %lld bytes (ByteSize=%llu), resizing",
-            (long long)written, size);
-        buf.resize(static_cast<size_t>(written));
-    }
-
     return buf;
 }
 
@@ -3840,8 +3816,9 @@ static void UploadLuaOnShutdown() {
 
 
 static uint64_t ReadSteamVersion(const std::string& steamDir) {
-    std::string manifest = steamDir + "package\\steam_client_win64.manifest";
-    std::ifstream f(FileUtil::Utf8ToPath(manifest));
+    // Beta clients only have the publicbeta manifest.
+    std::ifstream f(FileUtil::Utf8ToPath(steamDir + "package\\steam_client_win64.manifest"));
+    if (!f) f.open(FileUtil::Utf8ToPath(steamDir + "package\\steam_client_publicbeta_win64.manifest"));
     if (!f) return 0;
     std::string line;
     while (std::getline(f, line)) {
@@ -4298,7 +4275,6 @@ void Init(const std::string& steamPath, bool cloudSaveOnly, CR_NotifyFn notifyCa
 
     // Read Steam version for diagnostics and auto-update.
     uint64_t detectedVersion = ReadSteamVersion(g_steamPath);
-    g_detectedSteamVersion.store(detectedVersion, std::memory_order_relaxed);
     if (detectedVersion != 0)
         LOG("Steam version: %llu", detectedVersion);
     else
