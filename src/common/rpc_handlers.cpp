@@ -289,15 +289,14 @@ static bool EnsureAppQuotaInjected(uint32_t accountId, uint32_t appId,
 
 // Inject savefiles rules so AC exit-sync builds a valid file-root tree.
 // Without this, namespace apps get all files deleted ("no longer matches patterns").
-static std::unordered_set<uint32_t> g_saveFilesInjected;
+//
+// Not memoized: Steam can rebuild an app's in-memory appinfo at any time, dropping rules
+// we injected, and a one-shot flag would then leave the exit sync with no rule. The
+// injector skips a populated savefiles node, so repeating it is idempotent; the mutex
+// only keeps two RPC threads from editing the same KV together.
 static std::mutex g_saveFilesInjectedMutex;
 
 static void EnsureSaveFilesInjected(uint32_t appId) {
-    {
-        std::lock_guard<std::mutex> lock(g_saveFilesInjectedMutex);
-        if (g_saveFilesInjected.count(appId)) return;
-    }
-
     if (!SteamKvInjector::IsReady()) return;
 
     std::string steamPath = CloudIntercept::GetSteamPath();
@@ -318,10 +317,8 @@ static void EnsureSaveFilesInjected(uint32_t appId) {
         kvRules.push_back(std::move(sr));
     }
 
-    if (SteamKvInjector::InjectSaveFiles(appId, kvRules)) {
-        std::lock_guard<std::mutex> lock(g_saveFilesInjectedMutex);
-        g_saveFilesInjected.insert(appId);
-    }
+    std::lock_guard<std::mutex> lock(g_saveFilesInjectedMutex);
+    SteamKvInjector::InjectSaveFiles(appId, kvRules);
 }
 
 // g_lastVerifiedCN removed -- session lock in unified state file prevents concurrent writes.
