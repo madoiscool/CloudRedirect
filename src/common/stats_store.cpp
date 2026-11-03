@@ -1705,7 +1705,11 @@ static bool ReimportNativeStatsLocked(uint32_t appId, AppStats& stats,
     bool changed = MergeStatValues(stats.stats, native.stats);
     if (MergeAchievements(stats.achievements, native.achievements)) changed = true;
     if (ReconcileAchievementBits(stats.stats, stats.achievements)) changed = true;
-    if (stats.schema.empty() && !native.schema.empty()) {
+    // Seeding writes our schema to Steam's file, so a different one there is newer (Steam
+    // fetched it); adopt it, or the export after this writes the old schema back.
+    if (!native.schema.empty() && native.schema != stats.schema) {
+        LOG("[Stats] Schema updated app %u from Steam (%zu -> %zu bytes)",
+            appId, stats.schema.size(), native.schema.size());
         stats.schema = std::move(native.schema);
         changed = true;
     }
